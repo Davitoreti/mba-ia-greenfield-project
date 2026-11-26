@@ -56,6 +56,8 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Decision:** A — MinIO local/S3 conforme enunciado; bucket privado único, prefixos por canal/vídeo e categoria de artefato.
 
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
+
 ---
 ## TD-02: Protocolo e contrato de upload retomável
 
@@ -86,6 +88,8 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Decision:** A — multipart direto no MinIO/S3 com URLs assinadas por parte e retomada persistida.
 
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
+
 ---
 
 ## TD-03: Limites, integridade e abandono de uploads
@@ -111,6 +115,11 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 **Recommendation:** Option A — adotar teto de 10.000.000.000 bytes (10GB decimal), sessão de 24h, URLs por parte de 15min renováveis dentro da sessão e até duas sessões ativas por usuário. São defaults técnicos escolhidos nesta pesquisa por delegação do usuário; o enunciado não impõe esses valores. Conferir tamanho real antes de enfileirar e usar checksum suportado pelo storage selecionado; ETag multipart não é hash universal. O teste de compatibilidade deve fixar o algoritmo antes do contrato final. Validar partes e restringir sua assinatura reduz abuso, mas o limite global também precisa de conferência no servidor e limpeza após conclusão. Não prometer bloqueio prévio de todo byte excedente por URL assinada. [AWS: multipart e integridade](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html).
 
 **Decision:** A — 10.000.000.000 bytes, sessão de 24h, URLs de 15min renováveis, duas sessões ativas por usuário e limpeza reconciliadora. Valores definidos nesta decisão como defaults técnicos configuráveis, não impostos pelo enunciado.
+
+**Libraries:** —
+
+**Revisions:**
+- 2026-11-25 — Antes de fechar o contrato de upload, executar uma verificação de compatibilidade MinIO/S3 que fixe o algoritmo de checksum. A etapa deve provar validação de partes e do objeto concluído, aceitação de conteúdo íntegro e rejeição de divergências, sem tratar ETag multipart como checksum universal. Registrar o algoritmo e a semântica de erro na documentação e no contrato OpenAPI somente após aprovação da verificação; impedir o enfileiramento de conteúdo cuja integridade não foi validada. Rationale: compatibilidade verificada antes do contrato; etapa obrigatória aprovada pelo usuário para resolver OQ-1, sem alegar teste já executado.
 
 ---
 
@@ -143,6 +152,8 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Decision:** A — BullMQ com Redis real no Compose.
 
+**Libraries:** @nestjs/bullmq, bullmq
+
 ---
 
 ## TD-05: Garantia de disparo e reprocessamento
@@ -169,6 +180,11 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Decision:** A — outbox transacional, relay e consumidor idempotente; até três tentativas com backoff para falhas transitórias, erro persistido após esgotamento e rejeição definitiva para mídia inválida.
 
+**Libraries:** —
+
+**Revisions:**
+- 2026-11-25 — Preservar a decisão A: registrar a conclusão verificada do upload e a intenção de processamento na mesma transação PostgreSQL por meio de outbox; após commit, o relay publica no Redis/BullMQ e recupera publicações interrompidas, enquanto o consumidor protege efeitos contra repetição. Reconciliar objetos concluídos no storage quando houver falha anterior ao commit; não manter transação SQL aberta durante FFmpeg. Rationale: corrigir omissão documental no contexto para resolver AMB-1; outbox, relay e idempotência já estavam decididos, sem mudança de opção.
+
 ---
 
 ## TD-06: Isolamento e ferramenta do processamento
@@ -194,6 +210,8 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 **Recommendation:** Option A — a escala atual favorece reaproveitar NestJS e TypeORM, com serviço separado e módulos focados. ffprobe fornece saída estruturada para inspeção; FFmpeg extrai frame e prepara a mídia. Aplicar limites de CPU, memória, disco e tempo; concorrência inicial um job por worker. Passar argumentos sem shell e aceitar apenas objetos controlados pelo sistema, sem URLs arbitrárias. [ffprobe](https://ffmpeg.org/ffprobe.html) e [workers BullMQ](https://docs.bullmq.io/guide/workers/stalled-jobs) fundamentam a integração e o tratamento de reinícios.
 
 **Decision:** A — worker NestJS em container separado, FFmpeg/ffprobe em subprocessos, concorrência inicial de um job e recursos limitados.
+
+**Libraries:** @nestjs/bullmq, bullmq
 
 ---
 
@@ -226,6 +244,11 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Decision:** B — normalizar MP4/MOV válidos para MP4 H.264/AAC progressivo com faststart; reutilizar streams compatíveis quando possível. HLS e múltiplas resoluções ficam fora do escopo.
 
+**Libraries:** —
+
+**Revisions:**
+- 2026-11-25 — Preservar a decisão B: MP4 e MOV são os containers de entrada sujeitos a validação real; o derivado de reprodução é MP4 com vídeo H.264 e áudio AAC quando houver áudio, preparado com faststart e reprodução progressiva. Reutilizar streams apenas quando compatíveis; fixtures de navegadores validam compatibilidade e parâmetros de codificação dentro desse perfil, sem reabrir a escolha dos codecs. Rationale: distinguir entrada e saída no contexto para resolver AMB-2; o perfil já estava decidido, sem mudança de opção.
+
 ---
 
 ## TD-08: Rascunho, sessão de upload e estado técnico
@@ -248,9 +271,14 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 - **Pros:** Menos tabelas e consultas para a primeira versão.
 - **Cons:** Histórico e novas tentativas ficam difíceis; aumenta acoplamento entre ciclo do arquivo e do vídeo.
 
-**Recommendation:** Option A — preservar o rascunho como identidade estável e tratar a sessão como recurso descartável. Repetição da solicitação inicial com a mesma chave de idempotência deve devolver o mesmo resultado no escopo do proprietário; falha antes da criação no storage precisa ser recuperável. Um vídeo pronto continua rascunho e privado nesta fase. Eventos de armazenamento nunca publicam conteúdo automaticamente.
+**Recommendation:** Option A — preservar o rascunho como identidade estável e tratar a sessão como recurso descartável. Repetição da solicitação inicial com a mesma chave de idempotência deve devolver o mesmo resultado no escopo do proprietário; falha antes da criação no storage precisa ser recuperável. Persistir title não vazio, inicialmente derivado do nome original sanitizado, e editorialStatus com default draft. Manter technicalStatus separado: uploading, processing, ready ou error. Um vídeo pronto continua rascunho e privado nesta fase. Eventos de armazenamento nunca publicam conteúdo automaticamente.
 
 **Decision:** A — vídeo ligado ao canal, sessão de upload separada e estado técnico persistido: rascunho durante upload, processando após conclusão verificada, pronto após metadados/thumbnail/mídia disponíveis e erro após falha definitiva. Publicação editorial permanece separada e futura.
+
+**Libraries:** —
+
+**Revisions:**
+- 2026-11-25 — Explicitar o mínimo de persistência exigido pelo enunciado: title não vazio, derivado inicialmente do nome original sanitizado (até 255 caracteres), editorialStatus=draft persistido e technicalStatus independente. A combinação draft/uploading representa o rascunho inicial; processing, ready e error refletem o ciclo técnico sem publicar o vídeo. A edição de título e publicação continuam fora desta fase. Rationale: corrigir omissões de título e rascunho no plano conforme revisão do enunciado solicitada pelo usuário.
 
 ---
 
@@ -308,6 +336,8 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 **Recommendation:** Option A — entregar apenas ao proprietário autenticado nesta fase; URLs curtas em validade, não registradas em logs. Adotar validade inicial de 15min renovável, preservando identidade estável separada. Para download, oferecer o original validado; reprodução usa o derivado do TD-07. Isso implica manter ambos enquanto o vídeo existir e documentar custo adicional. Preservar origem privada também para thumbnails de rascunhos. A [documentação S3 de URLs assinadas](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) explica validade e uso das credenciais do emissor. A aplicação deve reautorizar novos acessos; revogar sessão do usuário não revoga automaticamente uma URL já emitida.
 
 **Decision:** A — storage privado, autorização do proprietário e URLs assinadas de 15min; reprodução progressiva com Range/206 e download do original validado com Content-Disposition attachment.
+
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
 ---
 
