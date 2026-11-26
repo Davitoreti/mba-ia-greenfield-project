@@ -58,6 +58,9 @@ Context7 foi consultado para NestJS, BullMQ e AWS SDK JavaScript v3. Para NestJS
 
 **Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
+**Revisions:**
+- 2026-11-26 — Usuário aprovou continuar a implementação com **MinIO AIStor Free** no Compose local, após indisponibilidade das imagens Community consultadas. Usar distribuição oficial com digest fixo, implantação em nó único e licença gratuita montada como secret fora do Git e da imagem. Preservar S3 em produção e a verificação real de multipart/checksum em SI-03.1.1. Versão, requisitos de licença e evidências operacionais em `nestjs-project/docs/video-infrastructure.md` e no progresso da fase.
+
 ---
 ## TD-02: Protocolo e contrato de upload retomável
 

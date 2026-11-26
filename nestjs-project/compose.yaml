@@ -1,3 +1,21 @@
+x-media-environment: &media-environment
+  STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-http://minio:9000}
+  STORAGE_SIGNING_ENDPOINT: ${STORAGE_SIGNING_ENDPOINT:-http://minio:9000}
+  STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
+  STORAGE_BUCKET: ${STORAGE_BUCKET:-streamtube}
+  STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-minioadmin}
+  STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-minioadmin}
+  STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_DB: ${REDIS_DB:-0}
+  QUEUE_PREFIX: ${QUEUE_PREFIX:-streamtube}
+  VIDEO_WORKER_CONCURRENCY: 1
+  VIDEO_FFMPEG_THREADS: ${VIDEO_FFMPEG_THREADS:-2}
+  VIDEO_PROCESSING_TIMEOUT_MS: ${VIDEO_PROCESSING_TIMEOUT_MS:-3600000}
+  VIDEO_TEMP_DIRECTORY: /var/tmp/streamtube
+  VIDEO_TEMP_BUDGET_BYTES: ${VIDEO_TEMP_BUDGET_BYTES:-25769803776}
+
 services:
   nestjs-api:
     build: 
@@ -7,6 +25,7 @@ services:
       - 3000:3000
     volumes:
       - .:/home/node/app
+    environment: *media-environment
     depends_on:
       db:
         condition: service_healthy
@@ -32,5 +51,75 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
+
+  minio:
+    # AIStor Free RELEASE.2026-09-19T17-05-25Z; license required.
+    image: quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3
+    command: ["minio", "server", "/data", "--console-address", ":9001", "--license", "/run/secrets/minio_license"]
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    secrets:
+      - minio_license
+    restart: unless-stopped
+    mem_limit: ${MINIO_MEMORY_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://minio:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  redis:
+    image: redis:7.4.7-alpine@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "redis", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  video-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment: *media-environment
+    volumes:
+      - worker-temp:/var/tmp/streamtube
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    cpus: ${VIDEO_WORKER_CPUS:-2}
+    mem_limit: ${VIDEO_WORKER_MEMORY_LIMIT:-2g}
+    pids_limit: 128
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(Number(require('node:fs').readFileSync('/tmp/video-worker.ready', 'utf8')), 0)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  minio-data:
+  redis-data:
+  worker-temp:
+
+secrets:
+  minio_license:
+    file: ${MINIO_LICENSE_PATH:-./.secrets/minio.license}
 
 

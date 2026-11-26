@@ -1,0 +1,19 @@
+FROM node:25.6.0-bookworm-slim@sha256:3746b7c78e343062cbad1a1a9f22e582e2aaeda5b183b7050b5831e22f988730 AS build
+WORKDIR /home/node/app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig*.json nest-cli.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:25.6.0-bookworm-slim@sha256:3746b7c78e343062cbad1a1a9f22e582e2aaeda5b183b7050b5831e22f988730 AS runtime
+ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg=${FFMPEG_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /home/node/app
+COPY --from=build --chown=node:node /home/node/app/node_modules ./node_modules
+COPY --from=build --chown=node:node /home/node/app/dist ./dist
+RUN mkdir -p /var/tmp/streamtube && chown node:node /var/tmp/streamtube
+USER node
+CMD ["node", "dist/worker.js"]

@@ -19,6 +19,10 @@ lerna-debug.log*
 /coverage
 /.nyc_output
 
+# AIStor licenses and local secrets
+/.secrets/
+*.license
+
 # IDEs and editors
 /.idea
 .project

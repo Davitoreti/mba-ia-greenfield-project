@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { mediaEnvValidationSchema } from './media-env.validation';
 
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -21,4 +22,4 @@ export const envValidationSchema = Joi.object({
   MAIL_PORT: Joi.number().default(1025),
   MAIL_FROM: Joi.string().default('"StreamTube" <noreply@streamtube.com>'),
   SWAGGER_ENABLED: Joi.string().valid('true', 'false').default('false'),
-});
+}).concat(mediaEnvValidationSchema);
