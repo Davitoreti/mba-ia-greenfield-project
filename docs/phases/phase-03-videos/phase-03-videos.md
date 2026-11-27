@@ -550,7 +550,7 @@ Campos definidos por esta especificação a partir de `phase-03-videos/TD-01`, `
 | objectKey | text | NOT NULL, destino controlado pelo servidor |
 | declaredSizeBytes | bigint | NOT NULL, 1..10.000.000.000 |
 | status | varchar | `initiating`, `uploading`, `completing`, `completed`, `aborted`, `expired`, `rejected` |
-| checksumAlgorithm, checksumValue | text | Nullable até etapa de compatibilidade; nenhum algoritmo presumido |
+| checksumAlgorithm, checksumValue | text | SHA256 / checksum composto base64 com sufixo `-N`; valor nullable até conclusão, sem tratar ETag como hash |
 | expiresAt | timestamptz | NOT NULL; início + 24h, configurável |
 | completedAt | timestamptz | Nullable; preenchido após verificação e commit |
 | createdAt, updatedAt | timestamptz | NOT NULL |
@@ -612,7 +612,7 @@ Contratos do backend NestJS; nenhum BFF ou tela será implementado. Novos nomes 
 
 **Request headers:** Authorization: Bearer.
 **Request query parameters:** `partNumberMarker`: integer opcional para paginação das partes.
-**Response 200:** `{ videoId, publicId, uploadSessionId, status, expiresAt, parts, nextPartNumberMarker }`; `parts` contém `{ partNumber, sizeBytes, etag }` e a evidência de checksum definida após a etapa de compatibilidade. O storage é fonte da lista de partes recebidas; a API devolve cursor até esgotar resultados.
+**Response 200:** `{ videoId, publicId, uploadSessionId, status, expiresAt, parts, nextPartNumberMarker }`; `parts` contém `{ partNumber, sizeBytes, etag, checksumSHA256 }`, com SHA-256 base64 de cada parte. O storage é fonte da lista de partes recebidas; a API devolve cursor até esgotar resultados.
 **Error responses:** 401 autenticação; 404 `UPLOAD_SESSION_NOT_FOUND`; 410 `UPLOAD_SESSION_EXPIRED`; 503 `STORAGE_UNAVAILABLE`.
 
 ---
@@ -620,8 +620,9 @@ Contratos do backend NestJS; nenhum BFF ou tela será implementado. Novos nomes 
 #### POST /videos/upload-sessions/:uploadSessionId/part-authorizations (SI-03.3.2)
 
 **Request headers:** Authorization: Bearer; Content-Type: application/json.
-**Request body:** `partNumbers`: lista não vazia de inteiros distintos e válidos para o multipart selecionado. Os campos e headers de integridade serão fixados pela etapa SI-03.1.1 antes de finalizar o DTO/OpenAPI.
+**Request body:** `partNumbers`: lista não vazia de inteiros distintos e válidos para o multipart selecionado; `checksums`: lista de `{ partNumber, checksumSHA256 }`, com exatamente uma entrada por número solicitado, SHA-256 base64 canônico de 32 bytes. Algoritmo fixo SHA256 / COMPOSITE, comprovado em SI-03.1.1.
 **Response 200:** `{ parts: [{ partNumber, url, headers, expiresAt }] }`; autorizações válidas por até 15min e nunca além da validade da sessão. Endpoint também renova autorização de partes não concluídas; credenciais permanecem no servidor.
+**Required PUT header:** `x-amz-checksum-sha256` é retornado em `headers` e deve ser enviado exatamente como assinado. Não reescrever o host; chamadas do browser usam `credentials: omit`. Campo ausente é rejeitado pelo MinIO com 400 AccessDenied; campo alterado, com 403 SignatureDoesNotMatch; bytes divergentes, com 400 XAmzContentChecksumMismatch.
 **Error responses:** 400 validação; 401 autenticação; 404 `UPLOAD_SESSION_NOT_FOUND`; 409 `UPLOAD_STATE_CONFLICT`; 410 `UPLOAD_SESSION_EXPIRED`; 503 `STORAGE_UNAVAILABLE`.
 **Bytes:** o cliente faz PUT diretamente na URL do storage; a API recebe apenas controle. Não enviar arquivo de 10GB através de JSON, multipart/form-data na API ou buffer em memória (`phase-03-videos/TD-02`, `TD-03`).
 
@@ -630,7 +631,7 @@ Contratos do backend NestJS; nenhum BFF ou tela será implementado. Novos nomes 
 #### POST /videos/upload-sessions/:uploadSessionId/completion (SI-03.4)
 
 **Request headers:** Authorization: Bearer; Content-Type: application/json.
-**Request body:** `parts`: lista ordenável de `{ partNumber, etag }`, sem duplicatas. Campos de checksum condicionados à evidência SI-03.1.1; não assumir ETag como hash do objeto.
+**Request body:** `parts`: lista ordenável de `{ partNumber, etag, checksumSHA256 }`, sem duplicatas, números consecutivos a partir de 1; `checksumSHA256`: checksum composto esperado `base64(SHA256(concatenação dos digests binários das partes em ordem)) + '-N'`. Comparar lista/checksums com storage; concluir com SHA256 / COMPOSITE e verificar HEAD com ChecksumMode ENABLED. Não assumir ETag como hash do objeto nem confundir checksum composto com SHA-256 direto do arquivo.
 **Response 202:** `{ videoId, publicId, status: processing }`, somente após verificar conclusão/integridade no storage e gravar estado + outbox atomicamente. Repetição retorna a mesma identidade/estado sem nova intenção de processamento; se já pronto, `200` com `status: ready`.
 **Error responses:** 400 validação ou `UPLOAD_PARTS_INVALID`; 401 autenticação; 404 `UPLOAD_SESSION_NOT_FOUND`; 409 `UPLOAD_STATE_CONFLICT`; 410 `UPLOAD_SESSION_EXPIRED`; 413 `VIDEO_TOO_LARGE`; 422 `UPLOAD_INTEGRITY_MISMATCH`; 503 `STORAGE_UNAVAILABLE`.
 **Recovery:** Redis indisponível após commit não transforma aceitação durável em perda de trabalho; outbox aguarda relay. Storage concluído com commit interrompido será reconciliado. Falhas de integridade/tamanho nunca enfileiram processamento e agendam limpeza do objeto (`phase-03-videos/TD-03`, `TD-05`).
@@ -675,7 +676,7 @@ Contratos do backend NestJS; nenhum BFF ou tela será implementado. Novos nomes 
 
 - Aplicar DTOs com `class-validator`/`class-transformer` e ValidationPipe herdado; nenhum controller executa regras de domínio ou acessa storage diretamente (`phase-02-auth/TD-06`).
 - Limite 10GB decimal, duas sessões ativas por usuário, 24h por sessão e 15min por autorização são defaults configuráveis. Conferir tamanho real e integridade antes do enqueue; não prometer bloqueio prévio de todo byte excedente (`phase-03-videos/TD-03`).
-- SI-03.1.1 deve provar algoritmo/headers de checksum em partes e objeto completo, incluindo payload corrompido. Registrar evidências e semântica OpenAPI antes de fechar as superfícies de assinatura/conclusão; este plano não afirma algoritmo nem compatibilidade já comprovada (revisão `phase-03-videos/TD-03`).
+- SI-03.1.1 comprovou SHA256 / COMPOSITE em MinIO AIStor Free com SDK 3.1153.0; resultados e reprodução em `nestjs-project/docs/storage-compatibility.md`. OpenAPI dos endpoints será implementado nos SIs responsáveis seguindo os campos acima. A compatibilidade AWS S3 não foi exercitada; não alegar validação em produção (revisão `phase-03-videos/TD-03`).
 - Toda operação com sessão/vídeo resolve propriedade a partir do canal/usuário autenticado; identificador público não concede autorização. Upload de outro proprietário retorna o mesmo 404 de recurso ausente.
 
 ---

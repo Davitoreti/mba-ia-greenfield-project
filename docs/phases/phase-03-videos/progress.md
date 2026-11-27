@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 1/16 completed
+**SIs:** 2/16 completed
 
 ### SI-03.1 — Preparar infraestrutura e dependências
 - **Status:** completed
@@ -23,9 +23,15 @@
   - Standard Compose video-worker logged FFmpeg/ffprobe 5.1.9-0+deb12u1 with libx264/AAC and successfully queried Redis. Health became healthy; inspection confirmed 2 CPUs, 2147483648 bytes of memory and no published ports. Previous static/build checks remain valid because this resume changed only licensing/runtime state and progress. SI-03.1 is completed; stopped before reading or implementing SI-03.1.1 in default mode.
 
 ### SI-03.1.1 — Implementar storage e comprovar integridade multipart
-- **Status:** pending
-- **Tests:** not run
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 13 passing across storage.integration-spec.ts, storage-delivery.integration-spec.ts and storage.module.spec.ts, executed by the test subagent inside nestjs-api with both DB_NAME and DB_DATABASE set to streamtube_test; no PostgreSQL connection or mutation. TypeScript, focused ESLint/Prettier, build and git diff --check passed. Existing API still returned HTTP 200 / Hello World. Full suites/full lint remain for phase-level final verification.
+- **Observations:**
+  - Implemented typed StoragePort, exported STORAGE token, StorageModule, AWS SDK adapter, controlled channel/video/category/generation keys, sanitized storage errors and short signed part/read/download authorizations. Internal and signing clients use their respective configured endpoints; no URL rewriting or sensitive logging. Adapter does not implement later upload/domain/outbox workflows.
+  - Context7 returned SDK presigner documentation at 3.1153.0 and current S3 protocol documentation without an indexed 3.1153.0 version; cross-checked installed SDK types and actual MinIO responses. Fixed SHA256 / COMPOSITE only after real compatibility passed. Report, versions, formula, error semantics, deployment limitations and reproduction command are in nestjs-project/docs/storage-compatibility.md.
+  - Proved two-part completion and exact bytes, checksum-enabled HEAD, ListParts pagination, repeated abort, corruption rejection for both part bytes and composite checksum with no accepted object, required signed headers, CORS/ETag/checksum exposure, private reads, signature/object/response-override tampering, real expiry, Range 206/416 and UTF-8 attachment disposition. CORS was exercised through HTTP headers without a browser; AWS S3 was not exercised. Tests create and clean only isolated random buckets.
+  - First test run had 8 passing / 5 failing: default 5-second timeout for the 5 MiB transfer and provider-specific checksum/header/CORS expectations. One focused fix attempt raised that integration timeout to 30 seconds, mapped XAmzContentChecksumMismatch, and asserted the observed exact MinIO statuses/codes plus literal CORS wildcard for credential-free fetches. A separate isolated SDK probe confirmed missing header = 400 AccessDenied, modified header = 403 SignatureDoesNotMatch, composite mismatch = 400 XAmzContentChecksumMismatch. All 13 tests then passed; no skips or weakened integrity checks.
+  - Created the configured local streamtube bucket and verified NoSuchBucketPolicy; no existing objects/policies were altered. Production bucket provisioning remains an operator responsibility. Default AIStor CORS permits the test origin; deployment should restrict origins when a frontend is introduced.
+  - Updated this plan's checksum fields and signing/completion contracts as explicitly required by SI-03.1.1. Future DTO/OpenAPI and JIT test-spec authoring must consume these proven fields; no future SI implementation or test-spec content was read/changed. TaskCreate/TaskUpdate are unavailable; this persistent list remains the 16-SI tracking fallback. Stopped before SI-03.2 in default mode; no commit or push performed.
 
 ### SI-03.2 — Persistir vídeos, sessões e outbox
 - **Status:** pending
